@@ -1,0 +1,10 @@
+{
+  "name": "superpowers",
+  "version": "6.3.0",
+  "description": "Superpowers software development methodology and core skills library: TDD, debugging, planning, and review.",
+  "author": {
+    "name": "obra"
+  },
+  "repository": "https://github.com/obra/superpowers",
+  "license": "MIT"
+}
