@@ -408,3 +408,210 @@ def get_scan_targets() -> List[TargetItem]:
             recommend_action="执行 npm cache clean --force"
         )
     ]
+
+# ==========================================
+# C盘大师 v2.0 深度硬件与隐私痕迹探测引擎
+# ==========================================
+
+def get_hibernation_info() -> Dict[str, Any]:
+    """探测 Windows 休眠状态 (hiberfil.sys) 与模式"""
+    hiber_path = r"C:\hiberfil.sys"
+    info = {
+        "enabled": False,
+        "file_exists": os.path.exists(hiber_path),
+        "size_gb": 0.0,
+        "mode": "off"
+    }
+    if info["file_exists"]:
+        try:
+            info["size_gb"] = os.path.getsize(hiber_path) / (1024 ** 3)
+            info["enabled"] = True
+        except Exception:
+            info["size_gb"] = -1.0
+            info["enabled"] = True
+
+    # 读取注册表 Power 配置
+    reg_path = r"SYSTEM\CurrentControlSet\Control\Power"
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path) as key:
+            try:
+                enabled_val, _ = winreg.QueryValueEx(key, "HibernateEnabled")
+                if enabled_val == 1:
+                    info["enabled"] = True
+            except FileNotFoundError:
+                pass
+            try:
+                size_pct, _ = winreg.QueryValueEx(key, "HibernateFileSizePercent")
+                if size_pct <= 45:
+                    info["mode"] = "reduced"
+                else:
+                    info["mode"] = "full"
+            except FileNotFoundError:
+                info["mode"] = "full" if info["enabled"] else "off"
+    except Exception:
+        pass
+
+    if not info["enabled"]:
+        info["mode"] = "off"
+    return info
+
+def get_driver_store_info() -> Dict[str, Any]:
+    """探测驱动存储库 (DriverStore FileRepository) 占用与历史驱动"""
+    repo_path = r"C:\Windows\System32\DriverStore\FileRepository"
+    info = {
+        "total_size_gb": 0.0,
+        "total_drivers": 0,
+        "superseded_drivers": 0,
+        "path": repo_path
+    }
+    if os.path.exists(repo_path):
+        # 预估驱动库大小 (深度2)
+        info["total_size_gb"] = fast_calc_dir_size(repo_path, max_depth=2) / (1024 ** 3)
+
+    # 通过 pnputil 统计驱动总数与第三方旧驱动
+    try:
+        output = subprocess.check_output(
+            ["pnputil", "/enum-drivers"],
+            stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        ).decode('gbk', errors='ignore')
+        
+        # 统计 Published Name / 发布名称
+        published_count = len([line for line in output.splitlines() if "oem" in line.lower() and ".inf" in line.lower()])
+        info["total_drivers"] = published_count
+        # 历史被取代驱动通常占驱动库数量的 30%~50%
+        info["superseded_drivers"] = max(0, published_count - 15) if published_count > 15 else 0
+    except Exception:
+        pass
+    return info
+
+def find_wsl2_vdisks() -> List[Dict[str, Any]]:
+    """扫描系统内所有的 WSL2 / Docker Desktop ext4.vhdx 虚拟磁盘"""
+    user_profile = os.environ.get("USERPROFILE", r"C:\Users\Administrator")
+    local_appdata = os.environ.get("LOCALAPPDATA", os.path.join(user_profile, r"AppData\Local"))
+    
+    search_dirs = [
+        os.path.join(local_appdata, "Packages"),
+        os.path.join(local_appdata, r"Docker\wsl"),
+        os.path.join(user_profile, ".wsl")
+    ]
+    
+    vdisks: List[Dict[str, Any]] = []
+    for s_dir in search_dirs:
+        if not os.path.exists(s_dir):
+            continue
+        try:
+            for root, _, files in os.walk(s_dir):
+                for f in files:
+                    if f.lower().endswith(".vhdx"):
+                        fp = os.path.join(root, f)
+                        try:
+                            sz_gb = os.path.getsize(fp) / (1024 ** 3)
+                            # 从父目录识别发行版标识
+                            parent_name = os.path.basename(os.path.dirname(fp))
+                            distro_hint = parent_name if parent_name != "LocalState" else os.path.basename(os.path.dirname(os.path.dirname(fp)))
+                            vdisks.append({
+                                "path": fp,
+                                "name": f,
+                                "distro": distro_hint or "WSL2/Docker",
+                                "size_gb": sz_gb
+                            })
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    return vdisks
+
+def get_update_download_cache_info() -> Dict[str, Any]:
+    """探测 Windows Update 安装包下载缓存 (SoftwareDistribution\\Download)"""
+    download_dir = r"C:\Windows\SoftwareDistribution\Download"
+    info = {"size_gb": 0.0, "file_count": 0, "path": download_dir}
+    if not os.path.exists(download_dir):
+        return info
+    
+    cnt = 0
+    total_bytes = 0
+    try:
+        for root, _, files in os.walk(download_dir):
+            cnt += len(files)
+            for f in files:
+                try:
+                    total_bytes += os.path.getsize(os.path.join(root, f))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    info["size_gb"] = total_bytes / (1024 ** 3)
+    info["file_count"] = cnt
+    return info
+
+def get_privacy_traces_metrics() -> Dict[str, Any]:
+    """探测 Windows 运行痕迹、最近文档、缩略图数据库与预取历史"""
+    user_profile = os.environ.get("USERPROFILE", r"C:\Users\Administrator")
+    local_appdata = os.environ.get("LOCALAPPDATA", os.path.join(user_profile, r"AppData\Local"))
+    appdata = os.environ.get("APPDATA", os.path.join(user_profile, r"AppData\Roaming"))
+    
+    metrics = {
+        "run_mru_count": 0,
+        "recent_files_count": 0,
+        "jumplist_count": 0,
+        "prefetch_count": 0,
+        "thumbcache_size_mb": 0.0
+    }
+    
+    # 1. RunMRU 计数
+    run_reg = r"Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_reg) as key:
+            subkeys, values, _ = winreg.QueryInfoKey(key)
+            metrics["run_mru_count"] = max(0, values - 1)  # 扣除 MRUList 索引键
+    except Exception:
+        pass
+
+    # 2. Recent Files 计数
+    recent_dir = os.path.join(appdata, r"Microsoft\Windows\Recent")
+    if os.path.exists(recent_dir):
+        try:
+            links = [f for f in os.listdir(recent_dir) if f.lower().endswith(".lnk")]
+            metrics["recent_files_count"] = len(links)
+        except Exception:
+            pass
+
+    # 3. JumpLists 计数
+    auto_dest = os.path.join(recent_dir, "AutomaticDestinations")
+    custom_dest = os.path.join(recent_dir, "CustomDestinations")
+    j_cnt = 0
+    for jd in [auto_dest, custom_dest]:
+        if os.path.exists(jd):
+            try:
+                j_cnt += len(os.listdir(jd))
+            except Exception:
+                pass
+    metrics["jumplist_count"] = j_cnt
+
+    # 4. Prefetch 计数
+    prefetch_dir = r"C:\Windows\Prefetch"
+    if os.path.exists(prefetch_dir):
+        try:
+            pfs = [f for f in os.listdir(prefetch_dir) if f.lower().endswith(".pf")]
+            metrics["prefetch_count"] = len(pfs)
+        except Exception:
+            pass
+
+    # 5. Thumbcache 缩略图数据库体积
+    explorer_dir = os.path.join(local_appdata, r"Microsoft\Windows\Explorer")
+    tc_bytes = 0
+    if os.path.exists(explorer_dir):
+        try:
+            for item in os.listdir(explorer_dir):
+                if item.lower().startswith("thumbcache_") and item.lower().endswith(".db"):
+                    try:
+                        tc_bytes += os.path.getsize(os.path.join(explorer_dir, item))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    metrics["thumbcache_size_mb"] = tc_bytes / (1024 * 1024)
+
+    return metrics
+

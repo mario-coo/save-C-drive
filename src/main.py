@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QProgressBar, QTableWidget, QTableWidgetItem,
     QHeaderView, QTextEdit, QSplitter, QFrame, QMessageBox, QComboBox,
-    QLineEdit, QAbstractItemView, QMenu
+    QLineEdit, QAbstractItemView, QMenu, QTabWidget, QCheckBox
 )
 
 import scanner
@@ -53,6 +53,11 @@ class ScanWorker(QThread):
         mem_stat = scanner.get_memory_metrics()
         page_stat = scanner.get_pagefile_config()
         vss_stat = scanner.get_vss_storage_info()
+        hiber_stat = scanner.get_hibernation_info()
+        driver_stat = scanner.get_driver_store_info()
+        wsl_disks = scanner.find_wsl2_vdisks()
+        update_stat = scanner.get_update_download_cache_info()
+        privacy_stat = scanner.get_privacy_traces_metrics()
 
         sys_metrics = {
             "c_disk": c_stat,
@@ -60,7 +65,12 @@ class ScanWorker(QThread):
             "preferred_drive": preferred_drive,
             "memory": mem_stat,
             "pagefile": page_stat,
-            "vss": vss_stat
+            "vss": vss_stat,
+            "hibernation": hiber_stat,
+            "driver_store": driver_stat,
+            "wsl_disks": wsl_disks,
+            "update_cache": update_stat,
+            "privacy": privacy_stat
         }
 
         # 2. 扫描指定目标库
@@ -139,6 +149,58 @@ class ActionWorker(QThread):
         elif self.action_name == "dism_cleanup":
             success = actions.run_dism_cleanup(log_cb)
             self.action_done.emit("DISM 组件清理执行完毕", success)
+
+        elif self.action_name == "manage_hibernation":
+            mode = self.kwargs.get("mode", "reduced")
+            success = actions.manage_hibernation(mode, log_cb)
+            self.action_done.emit(f"休眠模式调整为 {mode} 执行完毕", success)
+
+        elif self.action_name == "clean_driver_store":
+            cnt = actions.clean_driver_store(log_cb)
+            self.action_done.emit(f"DriverStore 旧驱动精简完毕，共清理 {cnt} 个包", True)
+
+        elif self.action_name == "compact_wsl2":
+            vhdx = self.kwargs.get("vhdx_path", "")
+            success = actions.compact_wsl2_vdisk(vhdx, log_cb)
+            self.action_done.emit("WSL2 虚拟磁盘压缩完毕", success)
+
+        elif self.action_name == "clean_update_cache":
+            freed = actions.clean_update_cache(log_cb)
+            self.action_done.emit(f"Windows Update 缓存清理完毕，释放 {freed/(1024*1024):.2f} MB", True)
+
+        elif self.action_name == "batch_hardcore":
+            tasks = self.kwargs.get("tasks", {})
+            log_cb("【批处理】开始执行选中的系统硬核瘦身任务...")
+            if tasks.get("clean_safe"):
+                actions.clean_safe_paths(log_cb)
+            if tasks.get("hibernation"):
+                mode = tasks.get("hibernation_mode", "reduced")
+                actions.manage_hibernation(mode, log_cb)
+            if tasks.get("driver_store"):
+                actions.clean_driver_store(log_cb)
+            if tasks.get("update_cache"):
+                actions.clean_update_cache(log_cb)
+            if tasks.get("wsl2_paths"):
+                for p in tasks["wsl2_paths"]:
+                    actions.compact_wsl2_vdisk(p, log_cb)
+            if tasks.get("vss"):
+                actions.optimize_vss("4GB", log_cb)
+            self.action_done.emit("选中的硬核瘦身任务已全量执行完成！", True)
+
+        elif self.action_name == "batch_privacy":
+            items = self.kwargs.get("items", {})
+            log_cb("【批处理】开始执行选中的反取证与隐私去痕任务...")
+            if items.get("run_mru"):
+                actions.clean_run_mru(log_cb)
+            if items.get("recent"):
+                actions.clean_recent_and_jumplists(log_cb)
+            if items.get("prefetch"):
+                actions.clean_prefetch(log_cb)
+            if items.get("thumbcache"):
+                actions.clean_thumbcache(log_cb)
+            if items.get("dns"):
+                actions.flush_dns_cache(log_cb)
+            self.action_done.emit("选中的隐私与运行去痕任务已全量执行完成！", True)
 
 
 class MainWindow(QMainWindow):
@@ -276,6 +338,51 @@ class MainWindow(QMainWindow):
                 font-family: "Consolas", "Courier New", monospace;
                 font-size: 12px;
             }
+            QTabWidget::pane {
+                border: 1px solid #2d323f;
+                border-radius: 8px;
+                background-color: #14161d;
+                top: -1px;
+            }
+            QTabBar::tab {
+                background-color: #1a1c24;
+                color: #94a3b8;
+                padding: 8px 18px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                border: 1px solid #2d323f;
+                border-bottom: none;
+                margin-right: 4px;
+                font-weight: 600;
+                font-size: 13px;
+            }
+            QTabBar::tab:selected {
+                background-color: #2563eb;
+                color: #ffffff;
+            }
+            QTabBar::tab:hover:!selected {
+                background-color: #262c3a;
+                color: #f1f5f9;
+            }
+            QCheckBox {
+                color: #e2e8f0;
+                spacing: 8px;
+                font-size: 13px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 1px solid #475569;
+                border-radius: 4px;
+                background-color: #1e222d;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #38bdf8;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #2563eb;
+                border-color: #60a5fa;
+            }
         """)
 
     def _init_ui(self):
@@ -409,10 +516,16 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(actions_bar)
 
-        # 3. 分割区：核心表格 + 底部日志输出
-        splitter = QSplitter(Qt.Vertical)
+        # 3. 核心区域升级为 QTabWidget 三标签页控制台
+        self.tabs = QTabWidget()
 
-        # 表格控件
+        # ---------- TAB 1: 存储深度排查 ----------
+        tab1_widget = QWidget()
+        tab1_layout = QVBoxLayout(tab1_widget)
+        tab1_layout.setContentsMargins(6, 10, 6, 6)
+        tab1_layout.setSpacing(8)
+        tab1_layout.addLayout(actions_bar)
+
         self.table = QTableWidget()
         self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels([
@@ -421,27 +534,130 @@ class MainWindow(QMainWindow):
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(34)
 
-        # 允许所有表头列自由拖拽拉伸或收缩，彻底解决文字截断问题
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
         header.setCascadingSectionResizes(True)
         header.setHighlightSections(True)
 
-        # 设置适宜的初始列宽分布
         self.table.setColumnWidth(0, 95)    # 分类
         self.table.setColumnWidth(1, 210)   # 模块与名称
         self.table.setColumnWidth(2, 105)   # 占用体积
         self.table.setColumnWidth(3, 130)   # 安全级别
         self.table.setColumnWidth(4, 210)   # 推荐操作
-        self.table.setColumnWidth(5, 420)   # 功能说明 (长文本)
+        self.table.setColumnWidth(5, 420)   # 功能说明
         self.table.setColumnWidth(6, 320)   # 路径
 
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSortingEnabled(True)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
-        splitter.addWidget(self.table)
+        tab1_layout.addWidget(self.table)
+        self.tabs.addTab(tab1_widget, "📊 存储深度排查")
+
+        # ---------- TAB 2: 系统硬核瘦身 ----------
+        tab2_widget = QWidget()
+        tab2_layout = QVBoxLayout(tab2_widget)
+        tab2_layout.setContentsMargins(6, 10, 6, 6)
+        tab2_layout.setSpacing(8)
+
+        hardcore_bar = QHBoxLayout()
+        hardcore_bar.setSpacing(8)
+        self.btn_hardcore_rec = QPushButton("✨ 智能推荐预设")
+        self.btn_hardcore_rec.setProperty("class", "btn-secondary btn-sm")
+        self.btn_hardcore_rec.clicked.connect(self._select_hardcore_recommended)
+        hardcore_bar.addWidget(self.btn_hardcore_rec)
+
+        self.btn_hardcore_all = QPushButton("☑️ 全选")
+        self.btn_hardcore_all.setProperty("class", "btn-secondary btn-sm")
+        self.btn_hardcore_all.clicked.connect(lambda: self._set_all_checkboxes(self.table_hardcore, True))
+        hardcore_bar.addWidget(self.btn_hardcore_all)
+
+        self.btn_hardcore_none = QPushButton("⬜ 取消全选")
+        self.btn_hardcore_none.setProperty("class", "btn-secondary btn-sm")
+        self.btn_hardcore_none.clicked.connect(lambda: self._set_all_checkboxes(self.table_hardcore, False))
+        hardcore_bar.addWidget(self.btn_hardcore_none)
+
+        hardcore_bar.addStretch()
+
+        self.btn_hardcore_exec = QPushButton("⚡ 立即执行选中的硬核瘦身")
+        self.btn_hardcore_exec.setProperty("class", "btn-green")
+        self.btn_hardcore_exec.clicked.connect(self._exec_batch_hardcore)
+        hardcore_bar.addWidget(self.btn_hardcore_exec)
+        tab2_layout.addLayout(hardcore_bar)
+
+        self.table_hardcore = QTableWidget()
+        self.table_hardcore.setColumnCount(6)
+        self.table_hardcore.setHorizontalHeaderLabels([
+            "选择", "功能模块", "当前占用 / 状态", "优化策略配置", "安全级别", "底层技术原理说明"
+        ])
+        self.table_hardcore.setAlternatingRowColors(True)
+        self.table_hardcore.verticalHeader().setDefaultSectionSize(36)
+        h_header = self.table_hardcore.horizontalHeader()
+        h_header.setSectionResizeMode(QHeaderView.Interactive)
+        h_header.setStretchLastSection(True)
+        self.table_hardcore.setColumnWidth(0, 60)
+        self.table_hardcore.setColumnWidth(1, 230)
+        self.table_hardcore.setColumnWidth(2, 190)
+        self.table_hardcore.setColumnWidth(3, 230)
+        self.table_hardcore.setColumnWidth(4, 130)
+        self.table_hardcore.setColumnWidth(5, 420)
+        tab2_layout.addWidget(self.table_hardcore)
+        self.tabs.addTab(tab2_widget, "⚡ 系统硬核瘦身")
+
+        # ---------- TAB 3: 隐私与运行去痕 ----------
+        tab3_widget = QWidget()
+        tab3_layout = QVBoxLayout(tab3_widget)
+        tab3_layout.setContentsMargins(6, 10, 6, 6)
+        tab3_layout.setSpacing(8)
+
+        privacy_bar = QHBoxLayout()
+        privacy_bar.setSpacing(8)
+        self.btn_privacy_rec = QPushButton("✨ 推荐去痕预设")
+        self.btn_privacy_rec.setProperty("class", "btn-secondary btn-sm")
+        self.btn_privacy_rec.clicked.connect(self._select_privacy_recommended)
+        privacy_bar.addWidget(self.btn_privacy_rec)
+
+        self.btn_privacy_all = QPushButton("☑️ 全选")
+        self.btn_privacy_all.setProperty("class", "btn-secondary btn-sm")
+        self.btn_privacy_all.clicked.connect(lambda: self._set_all_checkboxes(self.table_privacy, True))
+        privacy_bar.addWidget(self.btn_privacy_all)
+
+        self.btn_privacy_none = QPushButton("⬜ 取消全选")
+        self.btn_privacy_none.setProperty("class", "btn-secondary btn-sm")
+        self.btn_privacy_none.clicked.connect(lambda: self._set_all_checkboxes(self.table_privacy, False))
+        privacy_bar.addWidget(self.btn_privacy_none)
+
+        privacy_bar.addStretch()
+
+        self.btn_privacy_exec = QPushButton("🛡️ 立即执行反取证去痕")
+        self.btn_privacy_exec.setProperty("class", "btn-amber")
+        self.btn_privacy_exec.clicked.connect(self._exec_batch_privacy)
+        privacy_bar.addWidget(self.btn_privacy_exec)
+        tab3_layout.addLayout(privacy_bar)
+
+        self.table_privacy = QTableWidget()
+        self.table_privacy.setColumnCount(6)
+        self.table_privacy.setHorizontalHeaderLabels([
+            "选择", "去痕项目", "痕迹数量 / 预估占用", "推荐优化动作", "敏感级别", "反取证与隐私防护价值"
+        ])
+        self.table_privacy.setAlternatingRowColors(True)
+        self.table_privacy.verticalHeader().setDefaultSectionSize(36)
+        p_header = self.table_privacy.horizontalHeader()
+        p_header.setSectionResizeMode(QHeaderView.Interactive)
+        p_header.setStretchLastSection(True)
+        self.table_privacy.setColumnWidth(0, 60)
+        self.table_privacy.setColumnWidth(1, 230)
+        self.table_privacy.setColumnWidth(2, 190)
+        self.table_privacy.setColumnWidth(3, 210)
+        self.table_privacy.setColumnWidth(4, 130)
+        self.table_privacy.setColumnWidth(5, 420)
+        tab3_layout.addWidget(self.table_privacy)
+        self.tabs.addTab(tab3_widget, "🕵️ 隐私与运行去痕")
+
+        # 4. 分割区：TabWidget + 底部日志输出
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(self.tabs)
 
         # 底部控制台与日志框
         bottom_widget = QWidget()
@@ -454,7 +670,6 @@ class MainWindow(QMainWindow):
         log_header.addWidget(lbl_log)
         log_header.addStretch()
 
-        # 优化清空日志按钮尺寸与样式，杜绝文字截断
         btn_clear_log = QPushButton("🗑️ 清空日志")
         btn_clear_log.setProperty("class", "btn-secondary btn-sm")
         btn_clear_log.setMinimumWidth(88)
@@ -607,6 +822,322 @@ class MainWindow(QMainWindow):
         vss_pct = int((vss['used_gb'] / vss['max_gb']) * 100) if vss['max_gb'] > 0 else 0
         self.vss_prog.setValue(vss_pct)
         self.vss_desc.setText(f"已用快照: {vss['used_gb']:.2f} GB | 已分配: {vss['allocated_gb']:.2f} GB")
+
+        # 刷新 Tab 2: 系统硬核瘦身列表
+        self._refresh_hardcore_table(metrics)
+
+        # 刷新 Tab 3: 隐私与运行去痕列表
+        self._refresh_privacy_table(metrics)
+
+    def _add_hardcore_row(self, key: str, name: str, status: str, default_check: bool, combo_options: List[str], safety: str, desc: str, extra_data: Any = None):
+        row = self.table_hardcore.rowCount()
+        self.table_hardcore.insertRow(row)
+
+        chk = QCheckBox()
+        chk.setChecked(default_check)
+        chk.setProperty("item_key", key)
+        chk.setProperty("extra_data", extra_data)
+        chk_widget = QWidget()
+        chk_layout = QHBoxLayout(chk_widget)
+        chk_layout.addWidget(chk)
+        chk_layout.setAlignment(Qt.AlignCenter)
+        chk_layout.setContentsMargins(0, 0, 0, 0)
+        self.table_hardcore.setCellWidget(row, 0, chk_widget)
+
+        name_item = QTableWidgetItem(name)
+        font = name_item.font()
+        font.setBold(True)
+        name_item.setFont(font)
+        self.table_hardcore.setItem(row, 1, name_item)
+
+        status_item = QTableWidgetItem(status)
+        status_item.setForeground(QBrush(QColor("#38bdf8")))
+        self.table_hardcore.setItem(row, 2, status_item)
+
+        if len(combo_options) > 1:
+            combo = QComboBox()
+            for opt in combo_options:
+                combo.addItem(opt)
+            self.table_hardcore.setCellWidget(row, 3, combo)
+        else:
+            act_item = QTableWidgetItem(combo_options[0] if combo_options else "")
+            self.table_hardcore.setItem(row, 3, act_item)
+
+        safe_item = QTableWidgetItem(safety)
+        safe_item.setForeground(QBrush(QColor("#34d399" if "安全" in safety or "官方" in safety or "无损" in safety else "#fbbf24")))
+        self.table_hardcore.setItem(row, 4, safe_item)
+
+        desc_item = QTableWidgetItem(desc)
+        desc_item.setToolTip(desc)
+        self.table_hardcore.setItem(row, 5, desc_item)
+
+    def _refresh_hardcore_table(self, metrics: dict):
+        self.table_hardcore.setRowCount(0)
+        
+        # 1. 休眠文件
+        hiber = metrics.get("hibernation", {})
+        h_sz = f"{hiber.get('size_gb', 0):.2f} GB" if hiber.get("file_exists") else "未生成 / 0 B"
+        h_mode = hiber.get("mode", "off")
+        mode_desc = "完整休眠模式 (75% RAM)" if h_mode == "full" else ("精简休眠模式 (减半50%)" if h_mode == "reduced" else "已彻底关闭")
+        self._add_hardcore_row(
+            key="hibernation",
+            name="Windows 休眠文件 (hiberfil.sys)",
+            status=f"当前占用: {h_sz} | {mode_desc}",
+            default_check=True if h_mode == "full" else False,
+            combo_options=["精简休眠模式 (Reduced, 减半并保留快速启动)", "彻底关闭休眠 (Off, 释放100%空间)"],
+            safety="🟢 安全推荐",
+            desc="优化内核休眠映射镜像，精简模式既可省数十GB又保留开机秒开"
+        )
+
+        # 2. DriverStore 驱动存储库
+        driver = metrics.get("driver_store", {})
+        d_sz = f"{driver.get('total_size_gb', 0):.2f} GB"
+        d_cnt = driver.get("total_drivers", 0)
+        d_old = driver.get("superseded_drivers", 0)
+        self._add_hardcore_row(
+            key="driver_store",
+            name="DriverStore 脱机驱动备份存储库",
+            status=f"约 {d_sz} | 共 {d_cnt} 个第三方驱动包 (含约 {d_old} 个历史备份)",
+            default_check=True if d_old > 0 else False,
+            combo_options=["清理非活动的脱机版本驱动 (安全卸载)"],
+            safety="🟢 官方机制",
+            desc="调用 pnputil 安全裁减已被新驱动取代的历史备份包，绝不触碰正在工作的活动驱动"
+        )
+
+        # 3. WSL2 / Docker 虚拟硬盘
+        wsl_disks = metrics.get("wsl_disks", [])
+        if wsl_disks:
+            for idx, wd in enumerate(wsl_disks):
+                self._add_hardcore_row(
+                    key=f"wsl2_{idx}",
+                    name=f"WSL2/Docker 虚拟磁盘 ({wd['distro']})",
+                    status=f"物理占用: {wd['size_gb']:.2f} GB ({wd['name']})",
+                    default_check=True,
+                    combo_options=["diskpart compact 物理回缩空闲扇区"],
+                    safety="🟢 无损压缩",
+                    desc=f"释放 Linux 内已删除但 Windows 未收回的扇区: {wd['path']}",
+                    extra_data=wd['path']
+                )
+        else:
+            self._add_hardcore_row(
+                key="wsl2_none",
+                name="WSL2 / Docker 虚拟磁盘 (ext4.vhdx)",
+                status="未检测到活跃的 WSL2/Docker 磁盘",
+                default_check=False,
+                combo_options=["无需优化"],
+                safety="🟢 无需动作",
+                desc="当安装使用 WSL2 或 Docker Desktop 且出现膨胀时可在此一键紧缩"
+            )
+
+        # 4. Windows Update 下载缓存
+        update_info = metrics.get("update_cache", {})
+        u_sz = f"{update_info.get('size_gb', 0)*1024:.1f} MB"
+        u_cnt = update_info.get("file_count", 0)
+        self._add_hardcore_row(
+            key="update_cache",
+            name="Windows Update 交付优化与下载缓存",
+            status=f"占用 {u_sz} | 包含 {u_cnt} 个临时更新包",
+            default_check=True if update_info.get('size_gb', 0) > 0.05 else False,
+            combo_options=["安全挂起服务并清空下载缓存"],
+            safety="🟢 安全可清",
+            desc="临时暂停 wuauserv 服务并清空 SoftwareDistribution\\Download 历史包后自动恢复"
+        )
+
+        # 5. VSS 卷影快照
+        vss = metrics.get("vss", {})
+        self._add_hardcore_row(
+            key="vss",
+            name="系统还原点卷影存储上限 (VSS)",
+            status=f"当前配额: {vss.get('max_gb', 0):.1f} GB | 已用快照: {vss.get('used_gb', 0):.2f} GB",
+            default_check=True if vss.get('max_gb', 0) > 4.5 else False,
+            combo_options=["锁定配额为 4GB (自动裁剪陈旧快照)"],
+            safety="🟡 系统托管",
+            desc="防止 Windows Update 和系统保护在后台频繁创建差异快照吃满 15GB"
+        )
+
+    def _add_privacy_row(self, key: str, name: str, status: str, action: str, safety: str, desc: str):
+        row = self.table_privacy.rowCount()
+        self.table_privacy.insertRow(row)
+
+        chk = QCheckBox()
+        chk.setChecked(True)
+        chk.setProperty("item_key", key)
+        chk_widget = QWidget()
+        chk_layout = QHBoxLayout(chk_widget)
+        chk_layout.addWidget(chk)
+        chk_layout.setAlignment(Qt.AlignCenter)
+        chk_layout.setContentsMargins(0, 0, 0, 0)
+        self.table_privacy.setCellWidget(row, 0, chk_widget)
+
+        name_item = QTableWidgetItem(name)
+        font = name_item.font()
+        font.setBold(True)
+        name_item.setFont(font)
+        self.table_privacy.setItem(row, 1, name_item)
+
+        status_item = QTableWidgetItem(status)
+        status_item.setForeground(QBrush(QColor("#fcd34d")))
+        self.table_privacy.setItem(row, 2, status_item)
+
+        act_item = QTableWidgetItem(action)
+        self.table_privacy.setItem(row, 3, act_item)
+
+        safe_item = QTableWidgetItem(safety)
+        safe_item.setForeground(QBrush(QColor("#34d399" if "零风险" in safety or "安全" in safety else "#fbbf24")))
+        self.table_privacy.setItem(row, 4, safe_item)
+
+        desc_item = QTableWidgetItem(desc)
+        desc_item.setToolTip(desc)
+        self.table_privacy.setItem(row, 5, desc_item)
+
+    def _refresh_privacy_table(self, metrics: dict):
+        self.table_privacy.setRowCount(0)
+        priv = metrics.get("privacy", {})
+
+        self._add_privacy_row(
+            key="run_mru",
+            name="Win+R 运行窗口历史记录 (RunMRU)",
+            status=f"{priv.get('run_mru_count', 0)} 条输入记录",
+            action="清空 RunMRU 注册表键值",
+            safety="🟢 零风险",
+            desc="彻底擦除在 Win+R 运行窗口敲入的历史可执行程序名与路径"
+        )
+
+        rec_cnt = priv.get("recent_files_count", 0)
+        jump_cnt = priv.get("jumplist_count", 0)
+        self._add_privacy_row(
+            key="recent",
+            name="最近访问文档与任务栏跳转列表 (Recent / JumpLists)",
+            status=f"{rec_cnt} 个快捷方式 | {jump_cnt} 个任务栏条目",
+            action="销毁 Recent 与 AutomaticDestinations 并刷新 Shell",
+            safety="🟢 零风险",
+            desc="消除文件资源管理器“快速访问”中留存的私密文档记录和任务栏右键历史"
+        )
+
+        pf_cnt = priv.get("prefetch_count", 0)
+        self._add_privacy_row(
+            key="prefetch",
+            name="应用程序执行预取痕迹 (Prefetch)",
+            status=f"{pf_cnt} 个运行预取文件 (*.pf)",
+            action="清空 C:\\Windows\\Prefetch 启动记录",
+            safety="🟢 安全清除",
+            desc="阻断反取证分析重构本机器各软件的启动历史与执行时间线"
+        )
+
+        tc_mb = priv.get("thumbcache_size_mb", 0)
+        self._add_privacy_row(
+            key="thumbcache",
+            name="资源管理器缩略图数据库 (Thumbcache)",
+            status=f"已缓存 {tc_mb:.1f} MB 数据库",
+            action="平滑重启 Explorer 并粉碎 thumbcache_*.db",
+            safety="🟡 需重载资源管理器",
+            desc="彻底销毁已删除图片或隐私照片在系统底层留存的微缩图快照库"
+        )
+
+        self._add_privacy_row(
+            key="dns",
+            name="Windows 本地 DNS 解析缓存",
+            status="当前网络会话活跃解析缓存",
+            action="执行 ipconfig /flushdns",
+            safety="🟢 零风险",
+            desc="刷新并抹除本机已解析访问过的所有公网与内网域名记录"
+        )
+
+    def _set_all_checkboxes(self, table: QTableWidget, checked: bool):
+        for row in range(table.rowCount()):
+            w = table.cellWidget(row, 0)
+            if w:
+                chk = w.findChild(QCheckBox)
+                if chk:
+                    chk.setChecked(checked)
+
+    def _select_hardcore_recommended(self):
+        for row in range(self.table_hardcore.rowCount()):
+            w = self.table_hardcore.cellWidget(row, 0)
+            if w:
+                chk = w.findChild(QCheckBox)
+                if chk:
+                    k = chk.property("item_key")
+                    chk.setChecked(k in ["hibernation", "driver_store", "update_cache", "vss"])
+
+    def _select_privacy_recommended(self):
+        self._set_all_checkboxes(self.table_privacy, True)
+
+    def _exec_batch_hardcore(self):
+        selected_tasks = {}
+        wsl2_paths = []
+        
+        for row in range(self.table_hardcore.rowCount()):
+            w = self.table_hardcore.cellWidget(row, 0)
+            if not w:
+                continue
+            chk = w.findChild(QCheckBox)
+            if not chk or not chk.isChecked():
+                continue
+            k = chk.property("item_key")
+            if k == "hibernation":
+                selected_tasks["hibernation"] = True
+                combo = self.table_hardcore.cellWidget(row, 3)
+                if combo and isinstance(combo, QComboBox):
+                    selected_tasks["hibernation_mode"] = "off" if "彻底关闭" in combo.currentText() else "reduced"
+                else:
+                    selected_tasks["hibernation_mode"] = "reduced"
+            elif k == "driver_store":
+                selected_tasks["driver_store"] = True
+            elif k.startswith("wsl2_") and k != "wsl2_none":
+                p = chk.property("extra_data")
+                if p:
+                    wsl2_paths.append(p)
+            elif k == "update_cache":
+                selected_tasks["update_cache"] = True
+            elif k == "vss":
+                selected_tasks["vss"] = True
+
+        if wsl2_paths:
+            selected_tasks["wsl2_paths"] = wsl2_paths
+
+        if not selected_tasks:
+            QMessageBox.warning(self, "未勾选任务", "请至少勾选一个系统硬核瘦身项目！")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "硬核瘦身确认",
+            f"确定执行选中的 {len(selected_tasks)} 项系统硬核瘦身任务吗？\n\n将按高可靠标准批量调用底层系统工具处理。",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self._run_action("batch_hardcore", tasks=selected_tasks)
+
+    def _exec_batch_privacy(self):
+        items = {}
+        for row in range(self.table_privacy.rowCount()):
+            w = self.table_privacy.cellWidget(row, 0)
+            if not w:
+                continue
+            chk = w.findChild(QCheckBox)
+            if not chk or not chk.isChecked():
+                continue
+            k = chk.property("item_key")
+            items[k] = True
+
+        if not items:
+            QMessageBox.warning(self, "未勾选项目", "请至少勾选一个反取证去痕项目！")
+            return
+
+        has_thumb = items.get("thumbcache", False)
+        msg = f"确定执行选中的 {len(items)} 项隐私去痕任务吗？"
+        if has_thumb:
+            msg += "\n\n⚠️ 注: 包含【缩略图数据库粉碎】，将平滑重启 Windows 资源管理器进程约 1 秒，属于正常现象。"
+
+        reply = QMessageBox.question(
+            self,
+            "隐私去痕确认",
+            msg,
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self._run_action("batch_privacy", items=items)
 
     def _apply_filter(self, text: str):
         search = text.strip().lower()
