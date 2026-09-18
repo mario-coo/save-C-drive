@@ -141,12 +141,39 @@ def optimize_vss(max_size: str, log_cb: Callable[[str], None]) -> bool:
         return False
 
 def configure_pagefile_drive(target_drive: str, log_cb: Callable[[str], None]) -> bool:
+    r"""
+    配置虚拟内存托管盘符（例如 'H' 或 'D'）
+    执行严苛的防御性介质校验，并在目标盘建立系统管理大小 (0 0)
+    若旧 C:\pagefile.sys 存在内核锁，自动注册 Windows 引导层延迟销毁 (MoveFileExW)
     """
-    配置虚拟内存托管盘符（例如 'H' 或 'C'）
-    关闭全局自动管理，在目标盘建立系统管理大小 (0 0)
-    """
+    import ctypes
+    DRIVE_FIXED = 3
+    MOVEFILE_DELAY_UNTIL_REBOOT = 0x4
+
     target_letter = target_drive.upper().rstrip(':')
-    log_cb(f"正在将系统虚拟内存迁移至 {target_letter}: 盘...")
+    target_root = f"{target_letter}:\\"
+
+    # Guard 1: 盘符有效性与存在性拦截
+    if not os.path.exists(target_root):
+        log_cb(f"【安全拦截】目标盘符 {target_root} 不存在，已终止操作！")
+        return False
+
+    # Guard 2: 存储介质类型校验 (杜绝可移动介质或网络卷)
+    drive_type = ctypes.windll.kernel32.GetDriveTypeW(target_root)
+    if drive_type != DRIVE_FIXED:
+        log_cb(f"【安全拦截】驱动器 {target_root} 不是本地固定硬盘（类型代码: {drive_type}）。为防止介质脱机导致系统蓝屏崩溃，禁止迁移虚拟内存！")
+        return False
+
+    # Guard 3: 目标磁盘可用空间校验 (至少需要 4GB 基础吞吐冗余)
+    try:
+        _, _, free_bytes = shutil.disk_usage(target_root)
+        free_gb = free_bytes / (1024 ** 3)
+        if free_gb < 4.0:
+            log_cb(f"【容量预警】目标盘 {target_root} 剩余可用空间仅有 {free_gb:.1f} GB，不足 4GB，建议先清理目标盘。")
+    except Exception:
+        pass
+
+    log_cb(f"【安全检查通过】目标盘 {target_letter}: 为合格本地固定存储，开始迁移...")
 
     # 1. 禁用全局自动管理 (通过 PowerShell WMI)
     ps_wmi = '$cs = Get-CimInstance Win32_ComputerSystem; Set-CimInstance -InputObject $cs -Property @{AutomaticManagedPagefile = $false}'
@@ -160,20 +187,29 @@ def configure_pagefile_drive(target_drive: str, log_cb: Callable[[str], None]) -
     try:
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path, 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, "PagingFiles", 0, winreg.REG_MULTI_SZ, new_value)
-        log_cb(f"注册表 PagingFiles 已更新为: {new_value}")
+        log_cb(f"注册表 PagingFiles 已安全更新为: {new_value}")
     except Exception as e:
         log_cb(f"注册表写入失败: {e}")
         return False
 
-    # 3. 如果从 C 迁往 H，尝试检查旧的 C:\pagefile.sys 能否删除
+    # 3. 针对旧的 C:\pagefile.sys 的处理
     if target_letter != "C" and os.path.exists(r"C:\pagefile.sys"):
         try:
             os.unlink(r"C:\pagefile.sys")
-            log_cb("检测到旧的 C:\\pagefile.sys 已未被占用，并已成功清理删除！")
+            log_cb("检测到旧的 C:\\pagefile.sys 已未被内核占用，并已直接清理删除！")
         except PermissionError:
-            log_cb("提示: 旧的 C:\\pagefile.sys 仍处于当前系统会话内核锁定中，在下次电脑重启后会自动释放并删除。")
+            # 当前会话内核独占锁，注册 Windows 引导层延迟销毁指令
+            success = ctypes.windll.kernel32.MoveFileExW(
+                r"C:\pagefile.sys",
+                None,
+                MOVEFILE_DELAY_UNTIL_REBOOT
+            )
+            if success:
+                log_cb("【高阶机制】旧的 C:\\pagefile.sys 处于系统内核独占锁中。已向 Windows 注册系统重启延迟删除标记 (MoveFileEx)，下次开机引导阶段将由内核自动彻底物理销毁，自动腾出 C 盘空间！")
+            else:
+                log_cb("提示: 旧的 C:\\pagefile.sys 处于当前会话锁定中，可在重启电脑后重新打开本工具扫描并清除。")
 
-    log_cb("虚拟内存设置完成！将在系统下次启动后生效。")
+    log_cb(f"虚拟内存迁移配置成功！已指向 {target_letter}: 盘，将在下次电脑重启后全量生效。")
     return True
 
 def run_dism_cleanup(log_cb: Callable[[str], None]) -> bool:

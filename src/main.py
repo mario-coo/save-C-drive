@@ -46,14 +46,18 @@ class ScanWorker(QThread):
 
         # 1. 采集全局系统状态
         c_stat = scanner.get_disk_metrics("C")
-        h_stat = scanner.get_disk_metrics("H")
+        fixed_drives = scanner.get_fixed_drives()
+        non_c_drives = [d for d in fixed_drives if d["letter"] != "C"]
+        preferred_drive = non_c_drives[0]["letter"] if non_c_drives else "C"
+
         mem_stat = scanner.get_memory_metrics()
         page_stat = scanner.get_pagefile_config()
         vss_stat = scanner.get_vss_storage_info()
 
         sys_metrics = {
             "c_disk": c_stat,
-            "h_disk": h_stat,
+            "fixed_drives": fixed_drives,
+            "preferred_drive": preferred_drive,
             "memory": mem_stat,
             "pagefile": page_stat,
             "vss": vss_stat
@@ -303,19 +307,19 @@ class MainWindow(QMainWindow):
         c_box.addWidget(self.c_desc)
         dashboard_layout.addWidget(self.card_c)
 
-        # 卡片 2: H 盘状态
+        # 卡片 2: 辅助数据盘状态 (自适应探测)
         self.card_h = QFrame()
         self.card_h.setProperty("class", "card")
         h_box = QVBoxLayout(self.card_h)
-        h_title = QLabel("H: 盘空间 (同 256GB SSD 分区)")
-        h_title.setProperty("class", "card-title")
+        self.h_title = QLabel("辅助数据盘空间 (推荐分区)")
+        self.h_title.setProperty("class", "card-title")
         self.h_value = QLabel("可用: -- GB")
         self.h_value.setProperty("class", "card-value")
         self.h_prog = QProgressBar()
         self.h_prog.setRange(0, 100)
         self.h_desc = QLabel("托管 Pagefile 零性能损耗")
         self.h_desc.setProperty("class", "card-desc")
-        h_box.addWidget(h_title)
+        h_box.addWidget(self.h_title)
         h_box.addWidget(self.h_value)
         h_box.addWidget(self.h_prog)
         h_box.addWidget(self.h_desc)
@@ -379,9 +383,15 @@ class MainWindow(QMainWindow):
         self.btn_vss_opt.clicked.connect(self._exec_vss_opt)
         actions_bar.addWidget(self.btn_vss_opt)
 
-        self.btn_pagefile_h = QPushButton("🚀 虚拟内存迁移至 H 盘")
+        # 动态驱动器选择与虚拟内存迁移
+        self.combo_pagefile_drive = QComboBox()
+        self.combo_pagefile_drive.setToolTip("选择承载虚拟内存的目标本地固定硬盘分区")
+        self.combo_pagefile_drive.setMinimumWidth(110)
+        actions_bar.addWidget(self.combo_pagefile_drive)
+
+        self.btn_pagefile_h = QPushButton("🚀 迁移虚拟内存至选定盘")
         self.btn_pagefile_h.setProperty("class", "btn-purple")
-        self.btn_pagefile_h.clicked.connect(lambda: self._exec_migrate_pagefile("H"))
+        self.btn_pagefile_h.clicked.connect(self._on_migrate_pagefile_clicked)
         actions_bar.addWidget(self.btn_pagefile_h)
 
         self.btn_dism = QPushButton("🧹 DISM 组件深度清理")
@@ -546,17 +556,50 @@ class MainWindow(QMainWindow):
         self.c_prog.setValue(used_pct_c)
         self.c_desc.setText(f"总计: {c['total_gb']:.1f} GB | 已用: {c['used_gb']:.1f} GB ({used_pct_c}%)")
 
-        h = metrics["h_disk"]
-        self.h_value.setText(f"可用: {h['free_gb']:.1f} GB")
-        used_pct_h = int((h['used_gb'] / h['total_gb']) * 100) if h['total_gb'] > 0 else 0
-        self.h_prog.setValue(used_pct_h)
-        self.h_desc.setText(f"总计: {h['total_gb']:.1f} GB | 已用: {h['used_gb']:.1f} GB ({used_pct_h}%)")
+        # 自适应选择卡片 2 展示的辅助盘
+        pg = metrics["pagefile"]
+        fixed_drives = metrics.get("fixed_drives", [])
+        
+        # 寻找当前托管盘或推荐盘
+        active_pg_drives = pg.get("active_drives", [])
+        active_secondary = next((d for d in active_pg_drives if d != "C"), None)
+        display_drive = active_secondary or metrics.get("preferred_drive", "H")
+        
+        # 刷新驱动器下拉选择器 (保持用户当前所选或优先默认项)
+        prev_choice = self.combo_pagefile_drive.currentData()
+        self.combo_pagefile_drive.blockSignals(True)
+        self.combo_pagefile_drive.clear()
+        for fd in fixed_drives:
+            letter = fd["letter"]
+            item_text = f"{letter}: 盘 (可用 {fd['free_gb']:.1f} GB)"
+            self.combo_pagefile_drive.addItem(item_text, letter)
+        
+        # 选中推荐项或原有项
+        select_letter = prev_choice or display_drive
+        for i in range(self.combo_pagefile_drive.count()):
+            if self.combo_pagefile_drive.itemData(i) == select_letter:
+                self.combo_pagefile_drive.setCurrentIndex(i)
+                break
+        self.combo_pagefile_drive.blockSignals(False)
+
+        # 刷新卡片 2 的指标
+        target_disk = next((d for d in fixed_drives if d["letter"] == display_drive), None)
+        if target_disk:
+            self.h_title.setText(f"{display_drive}: 盘空间 ({'当前托管' if display_drive == active_secondary else '推荐辅助分区'})")
+            self.h_value.setText(f"可用: {target_disk['free_gb']:.1f} GB")
+            used_pct_target = int((target_disk['used_gb'] / target_disk['total_gb']) * 100) if target_disk['total_gb'] > 0 else 0
+            self.h_prog.setValue(used_pct_target)
+            self.h_desc.setText(f"总计: {target_disk['total_gb']:.1f} GB | 已用: {target_disk['used_gb']:.1f} GB ({used_pct_target}%)")
+        else:
+            self.h_title.setText("辅助数据分区")
+            self.h_value.setText("无附加固定分区")
+            self.h_prog.setValue(0)
+            self.h_desc.setText("建议单盘自动管理")
 
         mem = metrics["memory"]
         self.mem_value.setText(f"RAM可用: {mem['avail_phys_gb']:.1f} GB")
         self.mem_prog.setValue(int(mem["memory_load_pct"]))
-        pg = metrics["pagefile"]
-        pg_loc = "H:盘托管中" if pg["h_has_pagefile"] else ("C:盘中" if pg["c_has_pagefile"] else "未检测")
+        pg_loc = f"{active_secondary}:盘托管中" if active_secondary else ("C:盘中" if pg["c_has_pagefile"] else "全局自动")
         self.mem_desc.setText(f"物理总量: {mem['total_phys_gb']:.1f} GB | 页面文件: {pg_loc}")
 
         vss = metrics["vss"]
@@ -618,12 +661,21 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             self._run_action("optimize_vss", max_size="4GB")
 
+    def _on_migrate_pagefile_clicked(self):
+        target_drive = self.combo_pagefile_drive.currentData()
+        if not target_drive:
+            QMessageBox.warning(self, "未选择分区", "请先在下拉列表中选择一个本地固定硬盘分区！")
+            return
+        self._exec_migrate_pagefile(target_drive)
+
     def _exec_migrate_pagefile(self, target_drive: str):
         reply = QMessageBox.question(
             self,
             "虚拟内存位置迁移",
             f"确定将系统虚拟内存 (Pagefile) 转移至 {target_drive}: 盘吗？\n\n"
-            f"注: C 盘与 H 盘同属一个 256GB SSD，性能完全一致。\n设置后需要重启一次电脑以彻底释放 C 盘旧文件占用的空间。",
+            f"• 系统将自动在该盘建立系统托管分页文件 (0 0)\n"
+            f"• 设置后旧的 C:\\pagefile.sys 将被标记为下次重启自动物理删除\n"
+            f"• 请在设置完成后重启一次电脑以彻底释放 C 盘空间。",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:

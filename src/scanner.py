@@ -52,6 +52,37 @@ def get_disk_metrics(drive_letter: str) -> Dict[str, float]:
     except Exception:
         return {"total_gb": 0.0, "free_gb": 0.0, "used_gb": 0.0, "free_pct": 0.0}
 
+def get_fixed_drives() -> List[Dict[str, Any]]:
+    """
+    枚举系统内所有本地固定硬盘分区 (DRIVE_FIXED = 3)
+    排除网络驱动器、RAM盘与拔插式U盘，按剩余空间降序排列
+    """
+    DRIVE_FIXED = 3
+    fixed_drives: List[Dict[str, Any]] = []
+    
+    # 获取逻辑驱动器掩码
+    buf = ctypes.create_unicode_buffer(512)
+    length = ctypes.windll.kernel32.GetLogicalDriveStringsW(512, buf)
+    raw_drives = [d for d in buf[:length].split('\x00') if d]
+
+    for d in raw_drives:
+        drive_letter = d[0].upper()
+        dtype = ctypes.windll.kernel32.GetDriveTypeW(d)
+        if dtype == DRIVE_FIXED:
+            metrics = get_disk_metrics(drive_letter)
+            fixed_drives.append({
+                "letter": drive_letter,
+                "path": d,
+                "total_gb": metrics["total_gb"],
+                "free_gb": metrics["free_gb"],
+                "used_gb": metrics["used_gb"],
+                "free_pct": metrics["free_pct"]
+            })
+
+    # 按剩余空间从大到小排序
+    fixed_drives.sort(key=lambda x: x["free_gb"], reverse=True)
+    return fixed_drives
+
 def get_pagefile_config() -> Dict[str, Any]:
     """从注册表获取当前 Pagefile 分页文件设定"""
     reg_path = r"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"
@@ -59,9 +90,9 @@ def get_pagefile_config() -> Dict[str, Any]:
         "configured_files": [],
         "is_automatic": False,
         "c_has_pagefile": False,
-        "h_has_pagefile": False,
+        "active_drives": [],
         "c_file_size_gb": 0.0,
-        "h_file_size_gb": 0.0
+        "external_pagefiles": {}  # drive_letter -> size_gb
     }
     try:
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path) as key:
@@ -77,26 +108,37 @@ def get_pagefile_config() -> Dict[str, Any]:
         pass
 
     for item in result["configured_files"]:
-        lower_item = item.lower()
+        lower_item = item.lower().strip()
         if "?:" in lower_item:
             result["is_automatic"] = True
-        if "c:" in lower_item:
-            result["c_has_pagefile"] = True
-        if "h:" in lower_item:
-            result["h_has_pagefile"] = True
+        if len(lower_item) >= 2 and lower_item[1] == ':':
+            drive = lower_item[0].upper()
+            result["active_drives"].append(drive)
+            if drive == "C":
+                result["c_has_pagefile"] = True
 
-    # 检查实际物理文件是否存在与大小
+    # 探测 C 盘
     if os.path.exists(r"C:\pagefile.sys"):
         try:
             result["c_file_size_gb"] = os.path.getsize(r"C:\pagefile.sys") / (1024 ** 3)
         except Exception:
-            result["c_file_size_gb"] = -1.0  # 存在但锁住无法直接获取或已挂起
+            result["c_file_size_gb"] = -1.0
 
-    if os.path.exists(r"H:\pagefile.sys"):
-        try:
-            result["h_file_size_gb"] = os.path.getsize(r"H:\pagefile.sys") / (1024 ** 3)
-        except Exception:
-            result["h_file_size_gb"] = -1.0
+    # 动态探测其他可能存在 pagefile 的盘
+    for d_item in get_fixed_drives():
+        d_letter = d_item["letter"]
+        if d_letter == "C":
+            continue
+        p_path = f"{d_letter}:\\pagefile.sys"
+        if os.path.exists(p_path):
+            try:
+                result["external_pagefiles"][d_letter] = os.path.getsize(p_path) / (1024 ** 3)
+            except Exception:
+                result["external_pagefiles"][d_letter] = -1.0
+
+    # 兼容原有的 h_has_pagefile 和 h_file_size_gb 接口以保持契约稳定
+    result["h_has_pagefile"] = "H" in result["active_drives"] or "H" in result["external_pagefiles"]
+    result["h_file_size_gb"] = result["external_pagefiles"].get("H", 0.0)
 
     return result
 
