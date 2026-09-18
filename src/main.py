@@ -323,12 +323,48 @@ class MainWindow(QMainWindow):
                 background-color: #38bdf8;
                 border-radius: 4px;
             }
-            QLineEdit, QComboBox {
+            QLineEdit {
                 background-color: #1a1c23;
                 border: 1px solid #333a4d;
                 border-radius: 6px;
                 padding: 5px 10px;
                 color: #f1f5f9;
+            }
+            QComboBox {
+                background-color: #1a1c23;
+                border: 1px solid #333a4d;
+                border-radius: 6px;
+                padding: 5px 28px 5px 10px;
+                color: #f1f5f9;
+                min-height: 20px;
+            }
+            QComboBox:hover {
+                border-color: #4b5563;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 24px;
+                border-left-width: 0px;
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1a1c23;
+                border: 1px solid #3b4252;
+                border-radius: 6px;
+                padding: 4px;
+                selection-background-color: #2563eb;
+                selection-color: #ffffff;
+                outline: none;
+            }
+            QComboBox QAbstractItemView::item {
+                min-height: 28px;
+                padding: 4px 8px;
+                border-radius: 4px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #2d3748;
             }
             QTextEdit {
                 background-color: #0d0e12;
@@ -493,7 +529,9 @@ class MainWindow(QMainWindow):
         # 动态驱动器选择与虚拟内存迁移
         self.combo_pagefile_drive = QComboBox()
         self.combo_pagefile_drive.setToolTip("选择承载虚拟内存的目标本地固定硬盘分区")
-        self.combo_pagefile_drive.setMinimumWidth(110)
+        self.combo_pagefile_drive.setMinimumWidth(190)
+        self.combo_pagefile_drive.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.combo_pagefile_drive.view().setMinimumWidth(220)
         actions_bar.addWidget(self.combo_pagefile_drive)
 
         self.btn_pagefile_h = QPushButton("🚀 迁移虚拟内存至选定盘")
@@ -599,7 +637,7 @@ class MainWindow(QMainWindow):
         self.table_hardcore.setColumnWidth(0, 60)
         self.table_hardcore.setColumnWidth(1, 230)
         self.table_hardcore.setColumnWidth(2, 190)
-        self.table_hardcore.setColumnWidth(3, 230)
+        self.table_hardcore.setColumnWidth(3, 280)
         self.table_hardcore.setColumnWidth(4, 130)
         self.table_hardcore.setColumnWidth(5, 420)
         tab2_layout.addWidget(self.table_hardcore)
@@ -788,6 +826,7 @@ class MainWindow(QMainWindow):
             letter = fd["letter"]
             item_text = f"{letter}: 盘 (可用 {fd['free_gb']:.1f} GB)"
             self.combo_pagefile_drive.addItem(item_text, letter)
+        self.combo_pagefile_drive.view().setMinimumWidth(220)
         
         # 选中推荐项或原有项
         select_letter = prev_choice or display_drive
@@ -856,6 +895,8 @@ class MainWindow(QMainWindow):
 
         if len(combo_options) > 1:
             combo = QComboBox()
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+            combo.view().setMinimumWidth(320)
             for opt in combo_options:
                 combo.addItem(opt)
             self.table_hardcore.setCellWidget(row, 3, combo)
