@@ -6,6 +6,7 @@ test_v2_features.py - C盘大师 v2.0 核心探测与动作防护测试套件
 import os
 import sys
 import unittest
+from unittest.mock import patch, MagicMock
 
 # 将 src 目录加入路径
 src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -63,9 +64,33 @@ class TestScannerV2(unittest.TestCase):
         for k in expected_keys:
             self.assertIn(k, metrics)
 
+    def test_get_fixed_drives(self):
+        drives = scanner.get_fixed_drives()
+        self.assertIsInstance(drives, list)
+        for d in drives:
+            self.assertIn("letter", d)
+            self.assertIn("path", d)
+            self.assertIn("total_gb", d)
+            self.assertIn("free_gb", d)
+            self.assertIn("used_gb", d)
+            self.assertIn("free_pct", d)
+            self.assertTrue(d["letter"].isalpha())
+
 
 class TestActionsV2(unittest.TestCase):
     """测试 actions.py 新增动作接口的签名与回调鲁棒性"""
+
+    def test_run_command_stream(self):
+        logs = []
+        code = actions.run_command_stream(["cmd.exe", "/c", "echo test_stream_output"], lambda m: logs.append(m))
+        self.assertEqual(code, 0)
+        self.assertTrue(any("test_stream_output" in m for m in logs))
+
+    def test_configure_pagefile_invalid_drive_guard(self):
+        logs = []
+        success = actions.configure_pagefile_drive("Z_NON_EXISTENT", lambda m: logs.append(m))
+        self.assertFalse(success)
+        self.assertTrue(any("安全拦截" in m for m in logs))
 
     def test_flush_dns_cache(self):
         logs = []
@@ -84,6 +109,18 @@ class TestActionsV2(unittest.TestCase):
         res = actions.clean_recent_and_jumplists(lambda msg: logs.append(msg))
         self.assertIsInstance(res, int)  # 返回释放的条目数
 
+    @patch("actions.subprocess.Popen")
+    @patch("actions.subprocess.run")
+    @patch("actions.time.sleep")
+    def test_clean_thumbcache(self, mock_sleep, mock_run, mock_popen):
+        logs = []
+        freed = actions.clean_thumbcache(lambda msg: logs.append(msg))
+        self.assertIsInstance(freed, int)
+        mock_sleep.assert_called_once_with(0.8)
+        mock_run.assert_called_once()
+        mock_popen.assert_called_once_with("explorer.exe")
+
 
 if __name__ == "__main__":
     unittest.main()
+

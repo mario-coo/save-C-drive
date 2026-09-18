@@ -530,7 +530,7 @@ class MainWindow(QMainWindow):
         self.combo_pagefile_drive = QComboBox()
         self.combo_pagefile_drive.setToolTip("选择承载虚拟内存的目标本地固定硬盘分区")
         self.combo_pagefile_drive.setMinimumWidth(190)
-        self.combo_pagefile_drive.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.combo_pagefile_drive.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.combo_pagefile_drive.view().setMinimumWidth(220)
         actions_bar.addWidget(self.combo_pagefile_drive)
 
@@ -573,7 +573,7 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setDefaultSectionSize(34)
 
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(True)
         header.setCascadingSectionResizes(True)
         header.setHighlightSections(True)
@@ -586,9 +586,9 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(5, 420)   # 功能说明
         self.table.setColumnWidth(6, 320)   # 路径
 
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSortingEnabled(True)
-        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
         tab1_layout.addWidget(self.table)
         self.tabs.addTab(tab1_widget, "📊 存储深度排查")
@@ -632,7 +632,7 @@ class MainWindow(QMainWindow):
         self.table_hardcore.setAlternatingRowColors(True)
         self.table_hardcore.verticalHeader().setDefaultSectionSize(36)
         h_header = self.table_hardcore.horizontalHeader()
-        h_header.setSectionResizeMode(QHeaderView.Interactive)
+        h_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         h_header.setStretchLastSection(True)
         self.table_hardcore.setColumnWidth(0, 60)
         self.table_hardcore.setColumnWidth(1, 230)
@@ -682,7 +682,7 @@ class MainWindow(QMainWindow):
         self.table_privacy.setAlternatingRowColors(True)
         self.table_privacy.verticalHeader().setDefaultSectionSize(36)
         p_header = self.table_privacy.horizontalHeader()
-        p_header.setSectionResizeMode(QHeaderView.Interactive)
+        p_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         p_header.setStretchLastSection(True)
         self.table_privacy.setColumnWidth(0, 60)
         self.table_privacy.setColumnWidth(1, 230)
@@ -694,7 +694,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(tab3_widget, "🕵️ 隐私与运行去痕")
 
         # 4. 分割区：TabWidget + 底部日志输出
-        splitter = QSplitter(Qt.Vertical)
+        splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self.tabs)
 
         # 底部控制台与日志框
@@ -879,7 +879,7 @@ class MainWindow(QMainWindow):
         chk_widget = QWidget()
         chk_layout = QHBoxLayout(chk_widget)
         chk_layout.addWidget(chk)
-        chk_layout.setAlignment(Qt.AlignCenter)
+        chk_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         chk_layout.setContentsMargins(0, 0, 0, 0)
         self.table_hardcore.setCellWidget(row, 0, chk_widget)
 
@@ -895,7 +895,7 @@ class MainWindow(QMainWindow):
 
         if len(combo_options) > 1:
             combo = QComboBox()
-            combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
             combo.view().setMinimumWidth(320)
             for opt in combo_options:
                 combo.addItem(opt)
@@ -1006,7 +1006,7 @@ class MainWindow(QMainWindow):
         chk_widget = QWidget()
         chk_layout = QHBoxLayout(chk_widget)
         chk_layout.addWidget(chk)
-        chk_layout.setAlignment(Qt.AlignCenter)
+        chk_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         chk_layout.setContentsMargins(0, 0, 0, 0)
         self.table_privacy.setCellWidget(row, 0, chk_widget)
 
@@ -1145,9 +1145,9 @@ class MainWindow(QMainWindow):
             self,
             "硬核瘦身确认",
             f"确定执行选中的 {len(selected_tasks)} 项系统硬核瘦身任务吗？\n\n将按高可靠标准批量调用底层系统工具处理。",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             self._run_action("batch_hardcore", tasks=selected_tasks)
 
     def _exec_batch_privacy(self):
@@ -1175,9 +1175,9 @@ class MainWindow(QMainWindow):
             self,
             "隐私去痕确认",
             msg,
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             self._run_action("batch_privacy", items=items)
 
     def _apply_filter(self, text: str):
@@ -1218,9 +1218,9 @@ class MainWindow(QMainWindow):
             self,
             "安全清理确认",
             "确定执行一键安全清理吗？\n\n将清理用户Temp、系统Temp、Puppeteer/Codex废弃运行时与Chrome缓存。\n该操作对用户文档完全安全零风险。",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             self._run_action("clean_safe")
 
     def _exec_vss_opt(self):
@@ -1228,9 +1228,9 @@ class MainWindow(QMainWindow):
             self,
             "卷影存储配额优化",
             "确定将 C 盘卷影副本配额上限限制为 4GB 吗？\n\nWindows 将自动清理超出配额的过期全盘差异快照（防止突然吃满 15GB）。",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             self._run_action("optimize_vss", max_size="4GB")
 
     def _on_migrate_pagefile_clicked(self):
@@ -1248,9 +1248,9 @@ class MainWindow(QMainWindow):
             f"• 系统将自动在该盘建立系统托管分页文件 (0 0)\n"
             f"• 设置后旧的 C:\\pagefile.sys 将被标记为下次重启自动物理删除\n"
             f"• 请在设置完成后重启一次电脑以彻底释放 C 盘空间。",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             self._run_action("migrate_pagefile", drive=target_drive)
 
     def _exec_dism(self):
@@ -1258,9 +1258,9 @@ class MainWindow(QMainWindow):
             self,
             "DISM 系统更新组件清理",
             "确定执行 DISM 组件存储深度清理吗？\n\n将清理被新安全补丁替代的历史更新包。过程需要约 1~3 分钟。",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             self._run_action("dism_cleanup")
 
     def _run_action(self, action_name: str, **kwargs):

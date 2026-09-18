@@ -6,6 +6,7 @@ actions.py - C盘与存储清理、虚拟内存管理、VSS优化执行模块
 import os
 import shutil
 import subprocess
+import time
 import winreg
 from typing import Callable, Tuple, Dict, Any, List
 
@@ -23,8 +24,9 @@ def run_command_stream(cmd: List[str], log_cb: Callable[[str], None]) -> int:
             creationflags=subprocess.CREATE_NO_WINDOW
         )
         try:
-            for line in proc.stdout:
-                log_cb(line.rstrip())
+            if proc.stdout is not None:
+                for line in proc.stdout:
+                    log_cb(line.rstrip())
         finally:
             if proc.stdout:
                 proc.stdout.close()
@@ -470,14 +472,14 @@ def clean_prefetch(log_cb: Callable[[str], None]) -> int:
 def clean_thumbcache(log_cb: Callable[[str], None]) -> int:
     """平滑重启 Explorer 并粉碎缩略图数据库缓存 (thumbcache_*.db)"""
     log_cb("【敏感操作】正在终止 explorer.exe 进程以解锁缩略图数据库...")
-    subprocess.run(["taskkill", "/f", "/im", "explorer.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
-    time.sleep(0.8)
-    
-    local_appdata = os.environ.get("LOCALAPPDATA", r"C:\Users\Administrator\AppData\Local")
-    explorer_dir = os.path.join(local_appdata, r"Microsoft\Windows\Explorer")
-    
     freed = 0
     try:
+        subprocess.run(["taskkill", "/f", "/im", "explorer.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+        time.sleep(0.8)
+        
+        local_appdata = os.environ.get("LOCALAPPDATA", r"C:\Users\Administrator\AppData\Local")
+        explorer_dir = os.path.join(local_appdata, r"Microsoft\Windows\Explorer")
+        
         if os.path.exists(explorer_dir):
             for item in os.listdir(explorer_dir):
                 if (item.lower().startswith("thumbcache_") or item.lower().startswith("iconcache_")) and item.lower().endswith(".db"):

@@ -63,7 +63,7 @@ def get_fixed_drives() -> List[Dict[str, Any]]:
     # 获取逻辑驱动器掩码
     buf = ctypes.create_unicode_buffer(512)
     length = ctypes.windll.kernel32.GetLogicalDriveStringsW(512, buf)
-    raw_drives = [d for d in buf[:length].split('\x00') if d]
+    raw_drives = [d for d in "".join(buf[:length]).split('\x00') if d]
 
     for d in raw_drives:
         drive_letter = d[0].upper()
